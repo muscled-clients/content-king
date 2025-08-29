@@ -1,7 +1,7 @@
 # Simple Video Editor Architecture Plan V2
 **Date:** 2025-08-25  
 **Purpose:** Updated architecture reflecting real feature requirements  
-**Status:** 🔄 Draft for Review
+**Status:** 🔄 Final for Review
 
 ## Problem Statement
 The original Simple Architecture Plan was created before understanding actual feature requirements. The current implementation has grown to include essential video editor features like multi-track support, undo/redo, keyboard shortcuts, and advanced timeline interactions. Rather than remove these features, we need an updated architecture that organizes them cleanly.
@@ -44,9 +44,14 @@ The original Simple Architecture Plan was created before understanding actual fe
 ### UI Components
 ```
 /src/components/video-studio/
-├── VideoStudio.tsx             # Main studio layout
-├── Timeline.tsx                # Core timeline UI (clips, scrubber, ruler)
-└── TimelineControls.tsx        # Zoom, track controls
+├── VideoStudio.tsx             # Main studio layout (4-panel interface)
+├── Timeline.tsx                # Timeline container & orchestration
+├── formatters.ts               # Time/frame formatting utilities
+└── timeline/                   # Timeline sub-components
+    ├── TimelineClips.tsx       # Clip manipulation & rendering (largest file)
+    ├── TimelineRuler.tsx       # Time markers & measurements
+    ├── TimelineScrubber.tsx    # Playhead control
+    └── TimelineControls.tsx    # Zoom, track management controls
 ```
 
 ## Architecture Constraints
@@ -68,13 +73,20 @@ The original Simple Architecture Plan was created before understanding actual fe
 - Function names clearly describe what they do
 - Minimal cognitive overhead when reading code
 - Easy to locate and modify specific functionality
+- Prefer multiple focused files over single massive files
+- Group related components in subdirectories for organization
 
 ## Key Architecture Decisions
 
-### 1. Consolidated Timeline Approach
-- Timeline.tsx handles core timeline UI (clips, scrubber, ruler)
-- TimelineControls.tsx handles reusable controls (zoom, track management)
-- Avoid deep component hierarchies (max 2 levels)
+### 1. Modular Timeline Architecture
+- Timeline.tsx acts as container/orchestrator for sub-components
+- Separate files for distinct responsibilities to avoid massive files:
+  - TimelineClips.tsx: Complex clip manipulation logic (~28KB)
+  - TimelineRuler.tsx: Time measurement display
+  - TimelineScrubber.tsx: Playhead position control
+  - TimelineControls.tsx: Zoom and track controls
+- Organized in timeline/ subdirectory for clear grouping
+- This fragmentation improves maintainability and code navigation
 
 ### 2. Scope-Based Integration Strategy
 - **Focused concerns**: Separate hooks for distinct responsibilities (recording, keyboard shortcuts)

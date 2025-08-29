@@ -426,7 +426,7 @@ export function VideoStudio() {
       {viewMode !== 'fullTab' && (
         <div className="h-14 bg-gray-800 border-b border-gray-700 flex items-center justify-between px-4 flex-shrink-0">
         <div className="flex items-center gap-4">
-          <Link href="/instructor" className="text-gray-400 hover:text-white">
+          <Link href="/" className="text-gray-400 hover:text-white">
             <ArrowLeft className="h-5 w-5" />
           </Link>
           <h1 className="text-lg font-semibold">Unpuzzle AI Course Maker</h1>
