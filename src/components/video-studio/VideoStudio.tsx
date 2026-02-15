@@ -1,16 +1,28 @@
-'use client'
-
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useVideoEditor } from '@/lib/video-editor/useVideoEditor'
 import { Button } from '@/components/ui/button'
-import { ArrowLeft, Play, Pause, Circle, Square, Undo2, Redo2, X, Maximize } from 'lucide-react'
-import Link from 'next/link'
+import { Play, Pause, Circle, Square, X, Maximize, Film, Music, RefreshCw, Download, ArrowUp, ArrowDown, Search, LogOut, Save, Loader2, FolderOpen } from 'lucide-react'
+import type { AssetFile, ExportProgress } from '@/types/electron'
+import type { AuthUser } from '@/lib/auth'
+import { FPS } from '@/lib/video-editor/types'
 import { Timeline } from './Timeline'
+import { ScriptPanel } from './ScriptPanel'
 import { useKeyboardShortcuts } from '@/lib/video-editor/useKeyboardShortcuts'
 import { formatFrame } from './formatters'
+import { useProjectSave } from '@/lib/useProjectSave'
+import { useProjectLoad } from '@/lib/useProjectLoad'
+import { OpenProjectDialog } from '@/components/OpenProjectDialog'
 
-export function VideoStudio() {
+interface VideoStudioProps {
+  user: AuthUser
+  onLogout: () => void
+}
+
+export function VideoStudio({ user, onLogout }: VideoStudioProps) {
   const editor = useVideoEditor()
+  const projectSave = useProjectSave()
+  const projectLoad = useProjectLoad()
+  const [isOpenDialogVisible, setIsOpenDialogVisible] = useState(false)
   const [topSectionHeight, setTopSectionHeight] = useState(65) // Default to 65%
   const [leftPanelWidth, setLeftPanelWidth] = useState(20) // Default to 20%
   const [recordingDuration, setRecordingDuration] = useState(0)
@@ -20,7 +32,34 @@ export function VideoStudio() {
   const isDraggingHorizontalRef = useRef(false)
   const containerRef = useRef<HTMLDivElement>(null)
   const videoPreviewRef = useRef<HTMLDivElement>(null)
-  
+  const [assets, setAssets] = useState<AssetFile[]>([])
+  const [assetFilter, setAssetFilter] = useState<'all' | 'audio' | 'video'>('all')
+  const [assetSearch, setAssetSearch] = useState('')
+  const [assetSortNewest, setAssetSortNewest] = useState(true)
+  const [isExporting, setIsExporting] = useState(false)
+  const [exportProgress, setExportProgress] = useState(0)
+  const [exportResult, setExportResult] = useState<{ path: string } | null>(null)
+  const [exportError, setExportError] = useState<string | null>(null)
+
+  // Load assets from local directories
+  const loadAssets = useCallback(async () => {
+    if (!window.electronAPI) return
+    const files = await window.electronAPI.listAssets()
+    setAssets(files)
+  }, [])
+
+  // Load assets on mount and after recording/TTS
+  useEffect(() => {
+    loadAssets()
+  }, [loadAssets, editor.clips.length])
+
+  // Format file size
+  const formatSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes}B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}KB`
+    return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
+  }
+
   // Handle vertical resizing (between preview and bottom panels)
   const handleVerticalResizeMouseDown = (e: React.MouseEvent) => {
     e.preventDefault()
@@ -301,6 +340,81 @@ export function VideoStudio() {
     }
   }, [])
   
+  // Handle TTS audio generation
+  const handleAudioGenerated = useCallback((filePath: string, durationFrames: number) => {
+    editor.addAudioClip(filePath, durationFrames)
+  }, [editor])
+
+  // Handle export
+  const handleExport = useCallback(async () => {
+    if (!window.electronAPI || isExporting) return
+
+    setIsExporting(true)
+    setExportProgress(0)
+    setExportResult(null)
+    setExportError(null)
+
+    try {
+      const outputPath = await window.electronAPI.exportVideo({
+        clips: editor.clips.map(c => ({
+          id: c.id,
+          url: c.url,
+          trackIndex: c.trackIndex,
+          startFrame: c.startFrame,
+          durationFrames: c.durationFrames,
+          sourceInFrame: c.sourceInFrame,
+          sourceOutFrame: c.sourceOutFrame,
+        })),
+        tracks: editor.tracks.map(t => ({
+          id: t.id,
+          index: t.index,
+          name: t.name,
+          type: t.type,
+          visible: t.visible,
+          locked: t.locked,
+          muted: t.muted,
+        })),
+        totalFrames: editor.totalFrames,
+        fps: FPS,
+      })
+      setExportResult({ path: outputPath })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Export failed'
+      if (msg !== 'Export cancelled') {
+        setExportError(msg)
+      }
+    } finally {
+      setIsExporting(false)
+      setExportProgress(0)
+    }
+  }, [editor.clips, editor.tracks, editor.totalFrames, isExporting])
+
+  const handleCancelExport = useCallback(() => {
+    if (window.electronAPI) {
+      window.electronAPI.cancelExport()
+    }
+  }, [])
+
+  // Listen for export progress
+  useEffect(() => {
+    if (!window.electronAPI) return
+    const unsubscribe = window.electronAPI.onExportProgress((progress: ExportProgress) => {
+      setExportProgress(Math.round(progress.percent))
+    })
+    return unsubscribe
+  }, [])
+
+  // Auto-dismiss export result after 5s
+  useEffect(() => {
+    if (exportResult || exportError) {
+      const timer = setTimeout(() => {
+        setExportResult(null)
+        setExportError(null)
+      }, 5000)
+      return () => clearTimeout(timer)
+    }
+  }, [exportResult, exportError])
+
   // Handle delete with selection clearing
   const handleDeleteClip = (clipId: string) => {
     editor.deleteClip(clipId)
@@ -326,6 +440,15 @@ export function VideoStudio() {
     deleteClip: handleDeleteClip
   })
   
+  const handleOpenProject = useCallback(async (projectId: string) => {
+    const result = await projectLoad.loadProject(projectId)
+    if (result) {
+      editor.loadProjectState(result.clips, result.tracks)
+      projectSave.setProjectId(result.projectId)
+      setIsOpenDialogVisible(false)
+    }
+  }, [projectLoad, editor, projectSave])
+
   return (
     <div className="h-screen flex flex-col bg-gray-900 text-white">
       {/* Video element will be positioned by useEffect - start hidden */}
@@ -426,10 +549,7 @@ export function VideoStudio() {
       {viewMode !== 'fullTab' && (
         <div className="h-14 bg-gray-800 border-b border-gray-700 flex items-center justify-between px-4 flex-shrink-0">
         <div className="flex items-center gap-4">
-          <Link href="/" className="text-gray-400 hover:text-white">
-            <ArrowLeft className="h-5 w-5" />
-          </Link>
-          <h1 className="text-lg font-semibold">Unpuzzle AI Course Maker</h1>
+          <h1 className="text-lg font-semibold">Content King</h1>
         </div>
         <div className="flex items-center gap-2">
           {/* Recording Controls in Header */}
@@ -458,12 +578,105 @@ export function VideoStudio() {
               </Button>
             </div>
           )}
-          <Button size="sm" variant="ghost">Save Project</Button>
-          <Button size="sm" className="bg-blue-600 hover:bg-blue-700">Export</Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setIsOpenDialogVisible(true)}
+          >
+            <FolderOpen className="h-3 w-3 mr-1" />Open
+          </Button>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => projectSave.saveProject('Untitled Project', editor.clips, editor.tracks)}
+            disabled={projectSave.isSaving || editor.clips.length === 0}
+          >
+            {projectSave.isSaving ? (
+              <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Saving...</>
+            ) : (
+              <><Save className="h-3 w-3 mr-1" />Save Project</>
+            )}
+          </Button>
+          <Button
+            size="sm"
+            className="bg-blue-600 hover:bg-blue-700"
+            onClick={handleExport}
+            disabled={isExporting || editor.clips.length === 0}
+          >
+            <Download className="h-3 w-3 mr-1" />
+            {isExporting ? 'Exporting...' : 'Export'}
+          </Button>
+          <div className="w-px h-6 bg-gray-700 mx-1" />
+          <span className="text-xs text-gray-400">{user.name || user.email}</span>
+          <Button size="sm" variant="ghost" onClick={onLogout} title="Sign out" className="h-7 w-7 p-0">
+            <LogOut className="h-3 w-3" />
+          </Button>
         </div>
       </div>
       )}
       
+      {/* Export Progress Bar */}
+      {isExporting && (
+        <div className="h-8 bg-gray-800 border-b border-gray-700 flex items-center px-4 gap-3 flex-shrink-0">
+          <span className="text-xs text-gray-400">Exporting</span>
+          <div className="flex-1 h-2 bg-gray-700 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-blue-500 rounded-full transition-all duration-300"
+              style={{ width: `${exportProgress}%` }}
+            />
+          </div>
+          <span className="text-xs text-gray-400 w-10 text-right">{exportProgress}%</span>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-5 px-2 text-xs text-red-400 hover:text-red-300"
+            onClick={handleCancelExport}
+          >
+            Cancel
+          </Button>
+        </div>
+      )}
+
+      {/* Export Result/Error Messages */}
+      {exportResult && (
+        <div className="h-8 bg-green-900/50 border-b border-green-700 flex items-center px-4 gap-2 flex-shrink-0">
+          <span className="text-xs text-green-300">Exported to: {exportResult.path}</span>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-5 px-2 text-xs text-green-400"
+            onClick={() => setExportResult(null)}
+          >
+            <X className="h-3 w-3" />
+          </Button>
+        </div>
+      )}
+      {exportError && (
+        <div className="h-8 bg-red-900/50 border-b border-red-700 flex items-center px-4 gap-2 flex-shrink-0">
+          <span className="text-xs text-red-300">Export failed: {exportError}</span>
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-5 px-2 text-xs text-red-400"
+            onClick={() => setExportError(null)}
+          >
+            <X className="h-3 w-3" />
+          </Button>
+        </div>
+      )}
+
+      {/* Save Result/Error Messages */}
+      {projectSave.lastSavedAt && !projectSave.isSaving && (
+        <div className="h-8 bg-green-900/50 border-b border-green-700 flex items-center px-4 gap-2 flex-shrink-0">
+          <span className="text-xs text-green-300">Project saved</span>
+        </div>
+      )}
+      {projectSave.error && (
+        <div className="h-8 bg-red-900/50 border-b border-red-700 flex items-center px-4 gap-2 flex-shrink-0">
+          <span className="text-xs text-red-300">Save failed: {projectSave.error}</span>
+        </div>
+      )}
+
       {/* Main 4-Panel Layout - Hide in fullTab mode */}
       {viewMode !== 'fullTab' && (
       <div className="flex-1 flex flex-col overflow-hidden" ref={containerRef}>
@@ -471,20 +684,7 @@ export function VideoStudio() {
         <div className="flex" style={{ height: `${topSectionHeight}%` }}>
           {/* AI Script Panel - Dynamic width */}
           <div className="bg-gray-800 overflow-auto" style={{ width: `${leftPanelWidth}%` }}>
-            <div className="p-4">
-              <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-gray-300">AI Script</h3>
-                <Button size="sm" variant="ghost" className="h-6 px-2 text-xs">
-                  Generate
-                </Button>
-              </div>
-              <div className="space-y-2">
-                <div className="p-3 bg-gray-900 rounded text-sm">
-                  <p className="text-gray-400 mb-2">Scene 1</p>
-                  <p className="text-gray-300 text-xs">Your script content will appear here...</p>
-                </div>
-              </div>
-            </div>
+            <ScriptPanel onAudioGenerated={handleAudioGenerated} />
           </div>
           
           {/* Horizontal Resize Handle */}
@@ -624,24 +824,100 @@ export function VideoStudio() {
         <div className="flex flex-1" style={{ height: `${100 - topSectionHeight}%` }}>
           {/* Assets Panel - Dynamic width */}
           <div className="bg-gray-800 overflow-auto" style={{ width: `${leftPanelWidth}%` }}>
-            <div className="p-4">
+            <div className="p-3">
               <div className="flex items-center justify-between mb-3">
                 <h3 className="text-sm font-semibold text-gray-300">Assets</h3>
-                <Button size="sm" variant="ghost" className="h-6 px-2 text-xs">
-                  Import
+                <Button size="sm" variant="ghost" className="h-6 px-2 text-xs" onClick={loadAssets}>
+                  <RefreshCw className="w-3 h-3" />
                 </Button>
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                {editor.clips.map((clip, index) => (
-                  <div key={clip.id} className="aspect-video bg-gray-900 rounded flex items-center justify-center text-xs text-gray-400">
-                    Clip {index + 1}
-                  </div>
+              {/* Filter pills */}
+              <div className="flex gap-1 mb-3">
+                {(['all', 'audio', 'video'] as const).map((filter) => (
+                  <button
+                    key={filter}
+                    onClick={() => setAssetFilter(filter)}
+                    className={`px-2 py-0.5 rounded-full text-[10px] font-medium capitalize transition-colors ${
+                      assetFilter === filter
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+                    }`}
+                  >
+                    {filter}
+                  </button>
                 ))}
-                <div className="aspect-video bg-gray-900 rounded flex items-center justify-center">
-                  <svg className="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-                  </svg>
+              </div>
+              {/* Search + Sort row */}
+              <div className="flex gap-1 mb-3">
+                <div className="relative flex-1">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-500" />
+                  <input
+                    type="text"
+                    value={assetSearch}
+                    onChange={(e) => setAssetSearch(e.target.value)}
+                    placeholder="Search assets..."
+                    className="w-full text-xs bg-gray-900 text-gray-300 rounded pl-6 pr-2 py-1 border border-gray-700 focus:border-gray-500 focus:outline-none placeholder-gray-600"
+                  />
                 </div>
+                <button
+                  onClick={() => setAssetSortNewest((v) => !v)}
+                  className="flex items-center gap-0.5 px-2 py-1 rounded text-[10px] font-medium bg-gray-700 text-gray-400 hover:bg-gray-600 transition-colors whitespace-nowrap"
+                >
+                  {assetSortNewest ? <ArrowDown className="w-3 h-3" /> : <ArrowUp className="w-3 h-3" />}
+                  {assetSortNewest ? 'Newest' : 'Oldest'}
+                </button>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {assets.length === 0 && (
+                  <p className="text-xs text-gray-500 text-center py-4 col-span-3">No assets yet. Record a video or generate TTS.</p>
+                )}
+                {(() => {
+                  const filtered = assets
+                    .filter((a) => assetFilter === 'all' || a.type === assetFilter)
+                    .filter((a) => !assetSearch || a.filename.toLowerCase().includes(assetSearch.toLowerCase()))
+                    .sort((a, b) => assetSortNewest ? b.createdAt - a.createdAt : a.createdAt - b.createdAt)
+                  if (filtered.length === 0 && assets.length > 0) {
+                    return <p className="text-xs text-gray-500 text-center py-4 col-span-3">No matching assets</p>
+                  }
+                  return filtered.map((asset) => {
+                  const durationFrames = asset.durationSeconds
+                    ? Math.ceil(asset.durationSeconds * FPS)
+                    : 150
+                  return (
+                  <div
+                    key={asset.id}
+                    className="bg-gray-900 rounded-lg p-2 flex flex-col items-center justify-center text-center cursor-pointer hover:bg-gray-700 hover:ring-1 hover:ring-gray-500 transition-colors"
+                    draggable={asset.type === 'audio'}
+                    onDragStart={(e) => {
+                      if (asset.type === 'audio') {
+                        e.dataTransfer.setData('application/json', JSON.stringify({
+                          filePath: asset.filePath,
+                          durationFrames,
+                          type: 'audio'
+                        }))
+                      }
+                    }}
+                    onClick={() => {
+                      if (asset.type === 'audio') {
+                        editor.addAudioClip(asset.filePath, durationFrames)
+                      }
+                    }}
+                  >
+                    {asset.type === 'video' ? (
+                      <Film className="w-5 h-5 text-blue-400 mb-1" />
+                    ) : (
+                      <Music className="w-5 h-5 text-green-400 mb-1" />
+                    )}
+                    <p className="text-[10px] text-gray-300 truncate w-full">{asset.filename}</p>
+                    <p className="text-[10px] text-gray-500">
+                      {asset.durationSeconds
+                        ? `${Math.floor(asset.durationSeconds / 60)}:${String(Math.floor(asset.durationSeconds % 60)).padStart(2, '0')}`
+                        : formatSize(asset.size)}
+                    </p>
+                  </div>
+                  )
+                })
+                })()}
               </div>
             </div>
           </div>
@@ -679,11 +955,25 @@ export function VideoStudio() {
               onTrimClipEndComplete={editor.trimClipEndComplete}
               onAddTrack={editor.addTrack}
               onToggleTrackMute={editor.toggleTrackMute}
+              onDropAudioClip={(filePath, durationFrames, startFrame) => {
+                editor.addAudioClipAtFrame(filePath, durationFrames, startFrame)
+              }}
             />
           </div>
         </div>
       </div>
       )}
+
+      <OpenProjectDialog
+        isOpen={isOpenDialogVisible}
+        onClose={() => setIsOpenDialogVisible(false)}
+        onSelect={handleOpenProject}
+        projects={projectLoad.projects}
+        isLoading={projectLoad.isLoadingList}
+        isLoadingProject={projectLoad.isLoadingProject}
+        error={projectLoad.loadError}
+        onRefresh={projectLoad.fetchProjects}
+      />
     </div>
   )
 }

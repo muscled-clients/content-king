@@ -3,26 +3,33 @@ import { FPS } from './types'
 export interface TimelineSegment {
   id: string
   startFrame: number        // Position on timeline
-  endFrame: number          // End position on timeline  
-  sourceUrl: string         // Video file URL
-  sourceInFrame: number     // Start frame within source video
-  sourceOutFrame: number    // End frame within source video
+  endFrame: number          // End position on timeline
+  sourceUrl: string         // Video/audio file URL
+  sourceInFrame: number     // Start frame within source
+  sourceOutFrame: number    // End frame within source
+  trackIndex?: number       // Track index (used for mute checking on audio)
 }
 
 export class VirtualTimelineEngine {
   private segments: TimelineSegment[] = []
+  private audioSegments: TimelineSegment[] = []
   private currentFrame: number = 0
   private totalFrames: number = 0
   private isPlaying: boolean = false
   private fps: number = FPS
   private hasReachedEnd: boolean = false  // Track if we've naturally reached the end
-  
+
   // Playback loop variables
   private animationFrameId: number | null = null
   private lastFrameTime: number = 0
   private videoElement: HTMLVideoElement | null = null
   private currentSegment: TimelineSegment | null = null
-  
+
+  // Audio playback
+  private audioElements: Map<string, HTMLAudioElement> = new Map()
+  private activeAudioSegmentIds: Set<string> = new Set()
+  private mutedTrackIndices: Set<number> = new Set()
+
   // Callbacks
   private onFrameUpdate?: (frame: number) => void
   private onPlayStateChange?: (isPlaying: boolean) => void
@@ -48,7 +55,24 @@ export class VirtualTimelineEngine {
   // Add segments from clips
   setSegments(segments: TimelineSegment[]) {
     this.segments = segments
-    this.totalFrames = segments.reduce((max, seg) => Math.max(max, seg.endFrame), 0)
+    this.recalculateTotalFrames()
+  }
+
+  // Add audio segments from audio clips
+  setAudioSegments(segments: TimelineSegment[]) {
+    this.audioSegments = segments
+    this.recalculateTotalFrames()
+  }
+
+  // Set which track indices are muted
+  setMutedTracks(trackIndices: number[]) {
+    this.mutedTrackIndices = new Set(trackIndices)
+  }
+
+  private recalculateTotalFrames() {
+    const videoMax = this.segments.reduce((max, seg) => Math.max(max, seg.endFrame), 0)
+    const audioMax = this.audioSegments.reduce((max, seg) => Math.max(max, seg.endFrame), 0)
+    this.totalFrames = Math.max(videoMax, audioMax)
   }
 
   // Find segment at given frame
@@ -83,8 +107,9 @@ export class VirtualTimelineEngine {
       return
     }
     
-    // Sync video to timeline position
+    // Sync video and audio to timeline position
     this.syncVideoToTimeline()
+    this.syncAudioToTimeline()
     
     // Notify frame update - keep fractional frames for smooth movement
     this.onFrameUpdate?.(this.currentFrame)
@@ -219,8 +244,74 @@ export class VirtualTimelineEngine {
     }
   }
 
+  // Get or create an audio element for a given source URL
+  private getAudioElement(sourceUrl: string): HTMLAudioElement {
+    let audio = this.audioElements.get(sourceUrl)
+    if (!audio) {
+      audio = new Audio(sourceUrl)
+      audio.preload = 'auto'
+      this.audioElements.set(sourceUrl, audio)
+    }
+    return audio
+  }
+
+  // Sync audio elements to current timeline position
+  private syncAudioToTimeline() {
+    const frame = Math.floor(this.currentFrame)
+
+    // Find all audio segments active at current frame
+    const activeSegments = this.audioSegments.filter(
+      seg => frame >= seg.startFrame && frame < seg.endFrame
+    )
+    const activeIds = new Set(activeSegments.map(seg => seg.id))
+
+    // Pause audio segments that are no longer active
+    for (const prevId of this.activeAudioSegmentIds) {
+      if (!activeIds.has(prevId)) {
+        const seg = this.audioSegments.find(s => s.id === prevId)
+        if (seg) {
+          const audio = this.audioElements.get(seg.sourceUrl)
+          if (audio) {
+            audio.pause()
+          }
+        }
+      }
+    }
+    this.activeAudioSegmentIds = activeIds
+
+    // Sync each active audio segment
+    for (const seg of activeSegments) {
+      // Check if the segment's track is muted
+      if (seg.trackIndex !== undefined && this.mutedTrackIndices.has(seg.trackIndex)) {
+        const audio = this.audioElements.get(seg.sourceUrl)
+        if (audio && !audio.paused) audio.pause()
+        continue
+      }
+
+      const audio = this.getAudioElement(seg.sourceUrl)
+      const frameInSegment = this.currentFrame - seg.startFrame
+      const sourceFrame = seg.sourceInFrame + frameInSegment
+      const targetTime = sourceFrame / this.fps
+      const drift = Math.abs(audio.currentTime - targetTime)
+
+      if (!this.isPlaying) {
+        // When paused, just seek
+        audio.currentTime = targetTime
+        if (!audio.paused) audio.pause()
+      } else {
+        // When playing, keep in sync
+        if (drift > 0.15) {
+          audio.currentTime = targetTime
+        }
+        if (audio.paused) {
+          audio.play().catch(() => {})
+        }
+      }
+    }
+  }
+
   // Public API
-  
+
   play() {
     if (this.isPlaying) return
     
@@ -267,7 +358,12 @@ export class VirtualTimelineEngine {
         })
       }
     }
-    
+
+    // Pause all audio elements
+    for (const audio of this.audioElements.values()) {
+      if (!audio.paused) audio.pause()
+    }
+
     this.onPlayStateChange?.(false)
   }
 
@@ -285,6 +381,7 @@ export class VirtualTimelineEngine {
     // If paused, sync immediately
     if (!this.isPlaying) {
       this.syncVideoToTimeline()
+      this.syncAudioToTimeline()
       this.onFrameUpdate?.(this.currentFrame)
     }
   }
@@ -306,6 +403,14 @@ export class VirtualTimelineEngine {
     this.pause()
     this.videoElement = null
     this.segments = []
+    this.audioSegments = []
     this.currentSegment = null
+    // Clean up audio elements
+    for (const audio of this.audioElements.values()) {
+      audio.pause()
+      audio.src = ''
+    }
+    this.audioElements.clear()
+    this.activeAudioSegmentIds.clear()
   }
 }

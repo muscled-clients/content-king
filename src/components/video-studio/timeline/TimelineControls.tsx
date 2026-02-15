@@ -1,4 +1,4 @@
-'use client'
+
 
 import { Minus, Plus, Layers, Film, Music } from 'lucide-react'
 

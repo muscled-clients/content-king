@@ -1,5 +1,3 @@
-'use client'
-
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { Clip, Track, FPS } from './types'
 import { frameToTime } from './utils'
@@ -85,22 +83,52 @@ export function useVideoEditor() {
     historyRef.current.initialize([], 0)
   }, [])
   
-  // Convert clips to segments whenever clips change
+  // Convert clips to segments whenever clips or tracks change
   useEffect(() => {
     if (!engineRef.current) return
-    
-    // Convert clips to timeline segments
-    const segments: TimelineSegment[] = clips.map(clip => ({
+
+    // Separate video and audio clips based on their track type
+    const videoClips: Clip[] = []
+    const audioClips: Clip[] = []
+    for (const clip of clips) {
+      const track = tracks.find(t => t.index === clip.trackIndex)
+      if (track?.type === 'audio') {
+        audioClips.push(clip)
+      } else {
+        videoClips.push(clip)
+      }
+    }
+
+    // Convert video clips to segments
+    const videoSegments: TimelineSegment[] = videoClips.map(clip => ({
       id: clip.id,
       startFrame: clip.startFrame,
       endFrame: clip.startFrame + clip.durationFrames,
       sourceUrl: clip.url,
-      sourceInFrame: clip.sourceInFrame ?? 0,  // Use trim points if available
+      sourceInFrame: clip.sourceInFrame ?? 0,
       sourceOutFrame: clip.sourceOutFrame ?? (clip.originalDurationFrames ?? clip.durationFrames)
     }))
-    
-    engineRef.current.setSegments(segments)
-  }, [clips])
+
+    // Convert audio clips to segments (with trackIndex for mute support)
+    const audioSegments: TimelineSegment[] = audioClips.map(clip => ({
+      id: clip.id,
+      startFrame: clip.startFrame,
+      endFrame: clip.startFrame + clip.durationFrames,
+      sourceUrl: clip.url,
+      sourceInFrame: clip.sourceInFrame ?? 0,
+      sourceOutFrame: clip.sourceOutFrame ?? (clip.originalDurationFrames ?? clip.durationFrames),
+      trackIndex: clip.trackIndex
+    }))
+
+    engineRef.current.setSegments(videoSegments)
+    engineRef.current.setAudioSegments(audioSegments)
+
+    // Update muted tracks
+    const mutedIndices = tracks
+      .filter(t => t.type === 'audio' && t.muted)
+      .map(t => t.index)
+    engineRef.current.setMutedTracks(mutedIndices)
+  }, [clips, tracks])
   
   // Recording hook integration
   const handleClipCreated = useCallback((clip: Clip) => {
@@ -222,9 +250,9 @@ export function useVideoEditor() {
       // Save history immediately for delete (not a continuous operation)
       historyRef.current.saveState(updatedClips, newTotalFrames, 'Delete clip')
       
-      // Revoke the blob URL of deleted clip
+      // Revoke the blob URL of deleted clip (only for blob: URLs, not content-king: protocol)
       const deletedClip = prevClips.find(c => c.id === clipId)
-      if (deletedClip) {
+      if (deletedClip && deletedClip.url.startsWith('blob:')) {
         URL.revokeObjectURL(deletedClip.url)
       }
       
@@ -309,8 +337,6 @@ export function useVideoEditor() {
   
   // Split clip at specific frame (saves history immediately - not a drag operation)
   const splitClip = useCallback((clipId: string, splitFrame: number) => {
-    let firstClipId: string | null = null
-    
     setClipsWithRef(prevClips => {
       const clipIndex = prevClips.findIndex(c => c.id === clipId)
       if (clipIndex === -1) return prevClips
@@ -349,9 +375,6 @@ export function useVideoEditor() {
         sourceOutFrame: sourceOutFrame
       }
       
-      // Store first clip ID for selection
-      firstClipId = firstClip.id
-      
       // Replace original clip with two new clips
       const newClips = [...prevClips]
       newClips.splice(clipIndex, 1, firstClip, secondClip)
@@ -359,13 +382,15 @@ export function useVideoEditor() {
       // Save history immediately for split (not a continuous operation)
       historyRef.current.saveState(newClips, totalFramesRef.current, 'Split clip')
       
+      // Auto-select the left (first) clip after splitting
+      // Using setTimeout to ensure state update completes first
+      setTimeout(() => {
+        console.log('Setting selected clip after split:', firstClip.id)
+        setSelectedClipId(firstClip.id)
+      }, 0)
+      
       return newClips
     })
-    
-    // Auto-select the left (first) clip after splitting
-    if (firstClipId) {
-      setSelectedClipId(firstClipId)
-    }
   }, [setSelectedClipId])
 
   // Trim left side of selected clip (E key) - remove everything before current frame
@@ -570,13 +595,85 @@ export function useVideoEditor() {
     ))
   }, [])
 
+  // Add an audio clip to the first available audio track
+  const addAudioClip = useCallback((filePath: string, durationFrames: number) => {
+    // Find the first audio track
+    const audioTrack = tracks.find(t => t.type === 'audio')
+    if (!audioTrack) return
+
+    const clip: Clip = {
+      id: `clip-audio-${Date.now()}`,
+      url: `content-king://video${filePath}`,
+      trackIndex: audioTrack.index,
+      startFrame: 0,
+      durationFrames,
+      originalDurationFrames: durationFrames,
+      sourceInFrame: 0,
+      sourceOutFrame: durationFrames
+    }
+
+    setClipsWithRef(prev => {
+      const newClips = [...prev, clip]
+      historyRef.current.saveState(newClips, Math.max(totalFramesRef.current, durationFrames), 'Add audio clip')
+      return newClips
+    })
+    setTotalFramesWithRef(prev => Math.max(prev, durationFrames))
+  }, [tracks])
+
+  // Add an audio clip at a specific start frame (for drag-and-drop)
+  const addAudioClipAtFrame = useCallback((filePath: string, durationFrames: number, startFrame: number) => {
+    const audioTrack = tracks.find(t => t.type === 'audio')
+    if (!audioTrack) return
+
+    const clip: Clip = {
+      id: `clip-audio-${Date.now()}`,
+      url: `content-king://video${filePath}`,
+      trackIndex: audioTrack.index,
+      startFrame,
+      durationFrames,
+      originalDurationFrames: durationFrames,
+      sourceInFrame: 0,
+      sourceOutFrame: durationFrames
+    }
+
+    setClipsWithRef(prev => {
+      const newClips = [...prev, clip]
+      historyRef.current.saveState(newClips, Math.max(totalFramesRef.current, startFrame + durationFrames), 'Add audio clip')
+      return newClips
+    })
+    setTotalFramesWithRef(prev => Math.max(prev, startFrame + durationFrames))
+  }, [tracks])
+
   // Cleanup blob URLs only on unmount
   useEffect(() => {
     return () => {
       // Only cleanup when component unmounts, not on clips change
-      clips.forEach(clip => URL.revokeObjectURL(clip.url))
+      clips.forEach(clip => {
+        if (clip.url.startsWith('blob:')) {
+          URL.revokeObjectURL(clip.url)
+        }
+      })
     }
   }, []) // Empty deps - only runs on unmount
+
+  // Load a project state (from cloud save)
+  const loadProjectState = useCallback((newClips: Clip[], newTracks: Track[]) => {
+    setClipsWithRef(newClips)
+    setTracks(newTracks)
+    setCurrentFrame(0)
+    setVisualFrame(0)
+    setIsPlaying(false)
+    setSelectedClipId(null)
+    setSelectedTrackIndex(null)
+
+    // Recalculate total frames
+    const maxFrame = newClips.reduce((max, c) => Math.max(max, c.startFrame + c.durationFrames), 0)
+    setTotalFramesWithRef(maxFrame)
+
+    // Reset history
+    historyRef.current = new HistoryManager()
+    historyRef.current.saveState(newClips, maxFrame, 'Load project')
+  }, [])
 
   return {
     // State
@@ -622,7 +719,14 @@ export function useVideoEditor() {
     canUndo,
     canRedo,
     
+    // Audio
+    addAudioClip,
+    addAudioClipAtFrame,
+
     // Utilities
-    getCurrentClip
+    getCurrentClip,
+
+    // Project loading
+    loadProjectState,
   }
 }

@@ -1,4 +1,4 @@
-'use client'
+
 
 import { FPS } from '@/lib/video-editor/types'
 

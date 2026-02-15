@@ -1,5 +1,3 @@
-'use client'
-
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { Clip, Track, FPS } from '@/lib/video-editor/types'
 import { TimelineControls } from './timeline/TimelineControls'
@@ -28,6 +26,7 @@ interface TimelineProps {
   onTrimClipEndComplete?: () => void
   onAddTrack?: (type: 'video' | 'audio', position?: 'above' | 'between' | 'below') => void
   onToggleTrackMute?: (trackIndex: number) => void
+  onDropAudioClip?: (filePath: string, durationFrames: number, startFrame: number) => void
 }
 
 export function Timeline({ 
@@ -50,7 +49,8 @@ export function Timeline({
   onTrimClipEnd,
   onTrimClipEndComplete,
   onAddTrack,
-  onToggleTrackMute
+  onToggleTrackMute,
+  onDropAudioClip
 }: TimelineProps) {
   const [zoomLevel, setZoomLevel] = useState(1) // 1 = 100%, 2 = 200%, etc.
   const [isDraggingScrubber, setIsDraggingScrubber] = useState(false)
@@ -241,9 +241,14 @@ export function Timeline({
       />
       
       <div 
-        className="flex-1 relative overflow-x-auto overflow-y-auto" 
+        className="flex-1 relative overflow-x-auto overflow-y-auto"
         ref={scrollContainerRef}
         data-timeline-scroll="true"
+        onDragOver={(e) => {
+          if (e.dataTransfer.types.includes('application/json')) {
+            e.preventDefault()
+          }
+        }}
       >
         <div 
           className="relative select-none"
@@ -276,6 +281,7 @@ export function Timeline({
             onSeekToFrame={onSeekToFrame}
             onToggleTrackMute={onToggleTrackMute}
             onAddTrack={onAddTrack}
+            onDropAudioClip={onDropAudioClip}
           />
           
           <TimelineScrubber

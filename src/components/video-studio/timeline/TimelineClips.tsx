@@ -1,4 +1,4 @@
-'use client'
+
 
 import React, { useState, useRef, useEffect } from 'react'
 import { Clip, Track, FPS, DEFAULT_TRACK_HEIGHT } from '@/lib/video-editor/types'
@@ -24,6 +24,7 @@ interface TimelineClipsProps {
   onSeekToFrame?: (frame: number) => void
   onToggleTrackMute?: (trackIndex: number) => void
   onAddTrack?: (type: 'video' | 'audio', position?: 'above' | 'between' | 'below') => void
+  onDropAudioClip?: (filePath: string, durationFrames: number, startFrame: number) => void
 }
 
 export function TimelineClips({ 
@@ -44,8 +45,10 @@ export function TimelineClips({
   onTrimClipEndComplete,
   onSeekToFrame,
   onToggleTrackMute,
-  onAddTrack
+  onAddTrack,
+  onDropAudioClip
 }: TimelineClipsProps) {
+  const [externalDragOverTrackIndex, setExternalDragOverTrackIndex] = useState<number | null>(null)
   const [draggedClipId, setDraggedClipId] = useState<string | null>(null)
   const [dragOffset, setDragOffset] = useState(0)
   const [dragMode, setDragMode] = useState<'move' | 'trim-start' | 'trim-end' | null>(null)
@@ -638,15 +641,56 @@ export function TimelineClips({
 
   // Track rendering functions
   const renderTrack = (track: Track) => (
-    <div 
+    <div
       data-track-index={track.index}
       className={`border-b border-gray-800 relative flex items-center cursor-pointer transition-colors ${
-        selectedTrackIndex === track.index && !selectedClipId 
-          ? 'bg-gray-800 bg-opacity-50' 
-          : 'hover:bg-gray-800 hover:bg-opacity-25'
+        externalDragOverTrackIndex === track.index && track.type === 'audio'
+          ? 'bg-green-900 bg-opacity-40 ring-2 ring-inset ring-green-500 ring-opacity-60'
+          : selectedTrackIndex === track.index && !selectedClipId
+            ? 'bg-gray-800 bg-opacity-50'
+            : 'hover:bg-gray-800 hover:bg-opacity-25'
       }`}
       style={{ height: `${DEFAULT_TRACK_HEIGHT}px` }}
       onClick={(e) => handleTrackClick(track.index, e)}
+      onDragOver={(e) => {
+        if (e.dataTransfer.types.includes('application/json')) {
+          e.preventDefault()
+          e.stopPropagation()
+          if (track.type === 'audio') {
+            setExternalDragOverTrackIndex(track.index)
+          }
+        }
+      }}
+      onDragEnter={(e) => {
+        if (e.dataTransfer.types.includes('application/json') && track.type === 'audio') {
+          e.preventDefault()
+          setExternalDragOverTrackIndex(track.index)
+        }
+      }}
+      onDragLeave={(e) => {
+        const relatedTarget = e.relatedTarget as HTMLElement | null
+        if (!e.currentTarget.contains(relatedTarget)) {
+          setExternalDragOverTrackIndex(null)
+        }
+      }}
+      onDrop={(e) => {
+        e.preventDefault()
+        e.stopPropagation()
+        setExternalDragOverTrackIndex(null)
+        const json = e.dataTransfer.getData('application/json')
+        if (!json || track.type !== 'audio') return
+        try {
+          const data = JSON.parse(json)
+          if (data.type === 'audio' && onDropAudioClip) {
+            const scrollContainer = e.currentTarget.closest('[data-timeline-scroll]')
+            const rect = e.currentTarget.getBoundingClientRect()
+            const scrollLeft = scrollContainer ? scrollContainer.scrollLeft : 0
+            const x = e.clientX - rect.left + scrollLeft - 70
+            const startFrame = Math.max(0, Math.round((x / pixelsPerSecond) * FPS))
+            onDropAudioClip(data.filePath, data.durationFrames, startFrame)
+          }
+        } catch {}
+      }}
     >
       {renderTrackHeader(track)}
       {getClipsForTrack(clips, track.index).map((clip) => renderClip(clip, track))}
@@ -745,7 +789,17 @@ export function TimelineClips({
   )
   
   return (
-    <div className="relative" style={{ minHeight: 'calc(100% - 32px)' }} data-timeline-clips-container>
+    <div
+      className="relative"
+      style={{ minHeight: 'calc(100% - 32px)' }}
+      data-timeline-clips-container
+      onDragLeave={(e) => {
+        const relatedTarget = e.relatedTarget as HTMLElement | null
+        if (!e.currentTarget.contains(relatedTarget)) {
+          setExternalDragOverTrackIndex(null)
+        }
+      }}
+    >
       {/* Render all tracks with preview track inserted in correct position */}
       {tracks.map((track, index) => {
         // Check if we should insert preview track before this track (between video and audio)

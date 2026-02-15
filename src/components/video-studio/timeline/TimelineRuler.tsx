@@ -1,4 +1,4 @@
-'use client'
+
 
 import { formatTime } from '../formatters'
 
@@ -27,7 +27,8 @@ export function TimelineRuler({
   }
   
   const interval = getMarkerInterval()
-  const visibleTimelineSeconds = Math.ceil(timelineWidth / pixelsPerSecond)
+  const rawSeconds = timelineWidth / pixelsPerSecond
+  const visibleTimelineSeconds = isFinite(rawSeconds) ? Math.ceil(rawSeconds) : 60
   
   const handleClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if ((e.target as HTMLElement).classList.contains('ruler-container') || 

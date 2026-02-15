@@ -127,6 +127,7 @@ export function useKeyboardShortcuts({
         const clipAtPlayhead = getTopmostClipAtPlayhead()
         
         if (clipAtPlayhead) {
+          console.log('Splitting clip:', clipAtPlayhead.id, 'at frame:', currentFrame)
           splitClip(clipAtPlayhead.id, currentFrame)
         }
         return
