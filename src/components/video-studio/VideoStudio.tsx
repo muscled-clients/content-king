@@ -1,28 +1,29 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useVideoEditor } from '@/lib/video-editor/useVideoEditor'
 import { Button } from '@/components/ui/button'
-import { Play, Pause, Circle, Square, X, Maximize, Film, Music, RefreshCw, Download, ArrowUp, ArrowDown, Search, LogOut, Save, Loader2, FolderOpen } from 'lucide-react'
+import { Play, Pause, Circle, Square, X, Maximize, Film, Music, RefreshCw, Download, ArrowUp, ArrowDown, Search, LogOut, Save, Loader2, Home } from 'lucide-react'
 import type { AssetFile, ExportProgress } from '@/types/electron'
 import type { AuthUser } from '@/lib/auth'
+import type { LoadedProjectData } from '@/lib/useProjectLoad'
 import { FPS } from '@/lib/video-editor/types'
 import { Timeline } from './Timeline'
 import { ScriptPanel } from './ScriptPanel'
 import { useKeyboardShortcuts } from '@/lib/video-editor/useKeyboardShortcuts'
 import { formatFrame } from './formatters'
 import { useProjectSave } from '@/lib/useProjectSave'
-import { useProjectLoad } from '@/lib/useProjectLoad'
-import { OpenProjectDialog } from '@/components/OpenProjectDialog'
 
 interface VideoStudioProps {
   user: AuthUser
   onLogout: () => void
+  onGoHome: () => void
+  initialProjectId: string | null
+  initialProjectName: string
+  loadedProjectData: LoadedProjectData | null
 }
 
-export function VideoStudio({ user, onLogout }: VideoStudioProps) {
+export function VideoStudio({ user, onLogout, onGoHome, initialProjectId, initialProjectName, loadedProjectData }: VideoStudioProps) {
   const editor = useVideoEditor()
   const projectSave = useProjectSave()
-  const projectLoad = useProjectLoad()
-  const [isOpenDialogVisible, setIsOpenDialogVisible] = useState(false)
   const [topSectionHeight, setTopSectionHeight] = useState(65) // Default to 65%
   const [leftPanelWidth, setLeftPanelWidth] = useState(20) // Default to 20%
   const [recordingDuration, setRecordingDuration] = useState(0)
@@ -47,6 +48,16 @@ export function VideoStudio({ user, onLogout }: VideoStudioProps) {
     const files = await window.electronAPI.listAssets()
     setAssets(files)
   }, [])
+
+  // Load initial project data if opening an existing project
+  useEffect(() => {
+    if (initialProjectId) {
+      projectSave.setProjectId(initialProjectId)
+    }
+    if (loadedProjectData) {
+      editor.loadProjectState(loadedProjectData.clips, loadedProjectData.tracks)
+    }
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load assets on mount and after recording/TTS
   useEffect(() => {
@@ -440,15 +451,6 @@ export function VideoStudio({ user, onLogout }: VideoStudioProps) {
     deleteClip: handleDeleteClip
   })
   
-  const handleOpenProject = useCallback(async (projectId: string) => {
-    const result = await projectLoad.loadProject(projectId)
-    if (result) {
-      editor.loadProjectState(result.clips, result.tracks)
-      projectSave.setProjectId(result.projectId)
-      setIsOpenDialogVisible(false)
-    }
-  }, [projectLoad, editor, projectSave])
-
   return (
     <div className="h-screen flex flex-col bg-gray-900 text-white">
       {/* Video element will be positioned by useEffect - start hidden */}
@@ -547,11 +549,11 @@ export function VideoStudio({ user, onLogout }: VideoStudioProps) {
       )}
       {/* Header - Fixed height - Hide in fullTab mode */}
       {viewMode !== 'fullTab' && (
-        <div className="h-14 bg-gray-800 border-b border-gray-700 flex items-center justify-between px-4 flex-shrink-0">
-        <div className="flex items-center gap-4">
+        <div className="h-14 bg-gray-800 border-b border-gray-700 flex items-center justify-between pr-4 pl-20 flex-shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
+        <div className="flex items-center gap-4" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           <h1 className="text-lg font-semibold">Content King</h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2" style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}>
           {/* Recording Controls in Header */}
           {!editor.isRecording ? (
             <Button 
@@ -581,14 +583,15 @@ export function VideoStudio({ user, onLogout }: VideoStudioProps) {
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => setIsOpenDialogVisible(true)}
+            onClick={onGoHome}
+            title="Back to Home"
           >
-            <FolderOpen className="h-3 w-3 mr-1" />Open
+            <Home className="h-3 w-3 mr-1" />Home
           </Button>
           <Button
             size="sm"
             variant="ghost"
-            onClick={() => projectSave.saveProject('Untitled Project', editor.clips, editor.tracks)}
+            onClick={() => projectSave.saveProject(initialProjectName, editor.clips, editor.tracks)}
             disabled={projectSave.isSaving || editor.clips.length === 0}
           >
             {projectSave.isSaving ? (
@@ -964,16 +967,6 @@ export function VideoStudio({ user, onLogout }: VideoStudioProps) {
       </div>
       )}
 
-      <OpenProjectDialog
-        isOpen={isOpenDialogVisible}
-        onClose={() => setIsOpenDialogVisible(false)}
-        onSelect={handleOpenProject}
-        projects={projectLoad.projects}
-        isLoading={projectLoad.isLoadingList}
-        isLoadingProject={projectLoad.isLoadingProject}
-        error={projectLoad.loadError}
-        onRefresh={projectLoad.fetchProjects}
-      />
     </div>
   )
 }

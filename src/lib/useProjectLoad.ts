@@ -50,11 +50,17 @@ function getExtension(filename: string): string {
   return dot >= 0 ? filename.slice(dot) : ''
 }
 
+export interface LoadedProjectData {
+  clips: Clip[]
+  tracks: Track[]
+}
+
 export function useProjectLoad() {
   const [projects, setProjects] = useState<ProjectListItem[]>([])
   const [isLoadingList, setIsLoadingList] = useState(false)
   const [isLoadingProject, setIsLoadingProject] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [lastLoadedData, setLastLoadedData] = useState<LoadedProjectData | null>(null)
 
   const fetchProjects = useCallback(async () => {
     setIsLoadingList(true)
@@ -134,6 +140,9 @@ export function useProjectLoad() {
         sourceOutFrame: clipData.sourceOutFrame,
       }))
 
+      const loadedData = { clips, tracks: projectData.timeline.tracks }
+      setLastLoadedData(loadedData)
+
       return {
         clips,
         tracks: projectData.timeline.tracks,
@@ -156,13 +165,31 @@ export function useProjectLoad() {
     }
   }, [])
 
+  const deleteProject = useCallback(async (projectId: string): Promise<boolean> => {
+    try {
+      const res = await apiFetch(`/api/content-king/projects/${projectId}`, { method: 'DELETE' })
+      if (!res.ok) {
+        const err = await res.json()
+        setLoadError(err.error || 'Failed to delete project')
+        return false
+      }
+      setProjects(prev => prev.filter(p => p.id !== projectId))
+      return true
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : 'Failed to delete project')
+      return false
+    }
+  }, [])
+
   return {
     projects,
     isLoadingList,
     isLoadingProject,
     loadError,
+    lastLoadedData,
     fetchProjects,
     loadProject,
     unlockProject,
+    deleteProject,
   }
 }
